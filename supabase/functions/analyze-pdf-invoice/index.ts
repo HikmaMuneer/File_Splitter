@@ -45,6 +45,7 @@ Deno.serve(async (req: Request) => {
       headers: {
         "Authorization": `Bearer ${openaiApiKey}`,
         "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2",
       },
       body: JSON.stringify({
         model: "gpt-4o",
@@ -136,6 +137,7 @@ Return JSON:
       headers: {
         "Authorization": `Bearer ${openaiApiKey}`,
         "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2",
       },
       body: JSON.stringify({
         messages: [
@@ -171,6 +173,7 @@ Return JSON:
       headers: {
         "Authorization": `Bearer ${openaiApiKey}`,
         "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2",
       },
       body: JSON.stringify({
         assistant_id: assistant.id,
@@ -203,6 +206,7 @@ Return JSON:
       const statusResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs/${run.id}`, {
         headers: {
           "Authorization": `Bearer ${openaiApiKey}`,
+          "OpenAI-Beta": "assistants=v2",
         },
       });
       
@@ -214,6 +218,7 @@ Return JSON:
     const messagesResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
       headers: {
         "Authorization": `Bearer ${openaiApiKey}`,
+        "OpenAI-Beta": "assistants=v2",
       },
     });
 
@@ -226,6 +231,7 @@ Return JSON:
         method: "DELETE",
         headers: {
           "Authorization": `Bearer ${openaiApiKey}`,
+          "OpenAI-Beta": "assistants=v2",
         },
       });
       console.log("Cleaned up assistant");
