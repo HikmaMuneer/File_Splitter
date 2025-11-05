@@ -1,14 +1,16 @@
 # PDF Invoice Analyzer Edge Function
 
-This Supabase Edge Function analyzes PDF invoices using OpenAI's vision API to extract structured invoice data.
+This Supabase Edge Function converts PDF pages to individual page documents and analyzes them using OpenAI's vision API to extract structured invoice data.
 
 ## Features
 
+- **PDF Page Processing**: Converts multi-page PDFs into individual page documents for better analysis
 - **Document Type Detection**: Identifies if the document is an invoice, credit memo, or other document type
 - **Multi-Invoice Support**: Can detect and extract multiple invoices from a single PDF
 - **Vendor Name Extraction**: Extracts and normalizes vendor names with specific business rules
 - **Invoice Number Cleaning**: Extracts and cleans invoice numbers according to specific patterns
 - **Page Range Detection**: Identifies start and end pages for each invoice
+- **High-Quality Analysis**: Processes up to 10 pages with high detail for accurate OCR
 
 ## Setup
 
@@ -56,6 +58,7 @@ if (error) {
 ```json
 {
   "success": true,
+  "pages_processed": 4,
   "result": {
     "type": "invoice",
     "number_of_invoices": 2,
@@ -77,6 +80,13 @@ if (error) {
   }
 }
 ```
+
+## Processing Details
+
+- **Page Limit**: Processes up to 10 pages per PDF to manage API costs and response times
+- **Page Conversion**: Each PDF page is converted to a separate document for individual analysis
+- **High Detail**: Uses OpenAI's "high" detail setting for better text recognition
+- **Model**: Uses GPT-4o for superior vision capabilities
 
 ## Business Rules
 
@@ -127,6 +137,8 @@ Example workflow:
 const analysis = await supabase.functions.invoke('analyze-pdf-invoice', {
   body: { base64: pdfBase64 }
 });
+
+console.log(`Processed ${analysis.data.pages_processed} pages`);
 
 // 2. Generate split instructions
 const instructions = analysis.data.result.invoice_details
