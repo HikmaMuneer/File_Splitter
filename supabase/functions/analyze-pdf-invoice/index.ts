@@ -39,7 +39,154 @@ Deno.serve(async (req: Request) => {
     console.log(`Using existing file ID: ${fileId}`);
     console.log("Analyzing PDF with OpenAI Assistants API...");
 
-    // Create a temporary assistant for file analysis
+    // Step 1: First categorize the document type
+    const categorizationResponse = await fetch("https://api.openai.com/v1/assistants", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openaiApiKey}`,
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        name: "Document Type Categorizer",
+        instructions: `
+You are a document type classifier. Your task is to examine the provided PDF document and determine its type.
+
+Analyze the document and return ONLY one of these exact responses:
+- "invoice" - if the document contains invoices
+- "credit_memo" - if the document contains credit memos
+- "not_an_invoice" - if it's any other type of document (shipment invoice, statement, receipt, etc.)
+
+Return only the classification word, nothing else.
+        `.trim(),
+        tools: [{ type: "file_search" }],
+        tool_resources: {
+          file_search: {
+            vector_stores: [
+              {
+                file_ids: [fileId]
+              }
+            ]
+          }
+        }
+      }),
+    });
+
+    if (!categorizationResponse.ok) {
+      const errorData = await categorizationResponse.text();
+      console.error("OpenAI Categorization Assistant Creation Error:", errorData);
+      return new Response(JSON.stringify({ 
+        error: "Failed to create categorization assistant",
+        details: errorData 
+      }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
+      });
+    }
+
+    const categorizationAssistant = await categorizationResponse.json();
+    console.log("Created categorization assistant:", categorizationAssistant.id);
+
+    // Create a thread for categorization
+    const categorizationThreadResponse = await fetch("https://api.openai.com/v1/threads", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openaiApiKey}`,
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2",
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            role: "user",
+            content: "Please classify this document type."
+          }
+        ],
+      }),
+    });
+
+    const categorizationThread = await categorizationThreadResponse.json();
+
+    // Run categorization
+    const categorizationRunResponse = await fetch(`https://api.openai.com/v1/threads/${categorizationThread.id}/runs`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openaiApiKey}`,
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2",
+      },
+      body: JSON.stringify({
+        assistant_id: categorizationAssistant.id,
+      }),
+    });
+
+    const categorizationRun = await categorizationRunResponse.json();
+
+    // Wait for categorization completion
+    let categorizationRunStatus = categorizationRun;
+    while (categorizationRunStatus.status === "queued" || categorizationRunStatus.status === "in_progress") {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const statusResponse = await fetch(`https://api.openai.com/v1/threads/${categorizationThread.id}/runs/${categorizationRun.id}`, {
+        headers: {
+          "Authorization": `Bearer ${openaiApiKey}`,
+          "OpenAI-Beta": "assistants=v2",
+        },
+      });
+      
+      categorizationRunStatus = await statusResponse.json();
+    }
+
+    // Get categorization result
+    const categorizationMessagesResponse = await fetch(`https://api.openai.com/v1/threads/${categorizationThread.id}/messages`, {
+      headers: {
+        "Authorization": `Bearer ${openaiApiKey}`,
+        "OpenAI-Beta": "assistants=v2",
+      },
+    });
+
+    const categorizationMessages = await categorizationMessagesResponse.json();
+    const documentType = categorizationMessages.data[0]?.content[0]?.text?.value?.trim().toLowerCase();
+
+    // Cleanup categorization assistant
+    try {
+      await fetch(`https://api.openai.com/v1/assistants/${categorizationAssistant.id}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${openaiApiKey}`,
+          "OpenAI-Beta": "assistants=v2",
+        },
+      });
+    } catch (cleanupError) {
+      console.log("Failed to cleanup categorization assistant:", cleanupError);
+    }
+
+    console.log("Document type:", documentType);
+
+    // If not an invoice, return simple response
+    if (documentType !== "invoice") {
+      return new Response(JSON.stringify({ 
+        success: true,
+        file_id_analyzed: fileId,
+        result: {
+          type: documentType,
+          message: documentType === "not_an_invoice" 
+            ? "This document is not an invoice and cannot be processed for invoice splitting."
+            : `This document is a ${documentType}, not a standard invoice.`
+        }
+      }), {
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
+      });
+    }
+
+    // Step 2: If it's an invoice, proceed with detailed analysis using strict format
     const assistantResponse = await fetch("https://api.openai.com/v1/assistants", {
       method: "POST",
       headers: {
