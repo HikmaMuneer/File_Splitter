@@ -37,37 +37,10 @@ Deno.serve(async (req: Request) => {
     }
 
     console.log(`Using existing file ID: ${fileId}`);
-    console.log("Analyzing PDF with OpenAI Vision API...");
+    console.log("Analyzing PDF with OpenAI Assistants API...");
 
-    // First, get the file content from OpenAI
-    const fileResponse = await fetch(`https://api.openai.com/v1/files/${fileId}/content`, {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${openaiApiKey}`,
-      },
-    });
-
-    if (!fileResponse.ok) {
-      const errorData = await fileResponse.text();
-      console.error("OpenAI File API Error:", errorData);
-      return new Response(JSON.stringify({ 
-        error: "Failed to retrieve file from OpenAI",
-        details: errorData 
-      }), {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-          ...corsHeaders,
-        },
-      });
-    }
-
-    // Convert file content to base64
-    const fileBuffer = await fileResponse.arrayBuffer();
-    const base64Content = btoa(String.fromCharCode(...new Uint8Array(fileBuffer)));
-
-    // Use the file content in chat completion
-    const chatResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+    // Create a temporary assistant for file analysis
+    const assistantResponse = await fetch("https://api.openai.com/v1/assistants", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${openaiApiKey}`,
@@ -75,10 +48,8 @@ Deno.serve(async (req: Request) => {
       },
       body: JSON.stringify({
         model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: `
+        name: "PDF Invoice Analyzer",
+        instructions: `
 You are an intelligent PDF invoice analyzer. Your task is to examine the provided PDF document and return a structured JSON object with the following information:
 
 Step 1: Document Type Identification
@@ -127,32 +98,25 @@ Return JSON:
     }
   ]
 }
-            `.trim(),
-          },
-          {
-            role: "user",
-            content: [
+        `.trim(),
+        tools: [{ type: "file_search" }],
+        tool_resources: {
+          file_search: {
+            vector_stores: [
               {
-                type: "text",
-                text: "Please analyze this PDF document and extract the invoice information according to the rules provided.",
-              },
-              {
-                type: "text",
-                text: `Please analyze the PDF file with ID: ${fileId}`
+                file_ids: [fileId]
               }
-            ],
-          },
-        ],
-        temperature: 0.1,
-        max_tokens: 2000,
+            ]
+          }
+        }
       }),
     });
 
-    if (!chatResponse.ok) {
-      const errorData = await chatResponse.text();
-      console.error("OpenAI Chat API Error:", errorData);
+    if (!assistantResponse.ok) {
+      const errorData = await assistantResponse.text();
+      console.error("OpenAI Assistant Creation Error:", errorData);
       return new Response(JSON.stringify({ 
-        error: "Failed to analyze document with OpenAI",
+        error: "Failed to create assistant",
         details: errorData 
       }), {
         status: 500,
@@ -163,8 +127,111 @@ Return JSON:
       });
     }
 
-    const chatData = await chatResponse.json();
-    const result = chatData.choices[0]?.message?.content;
+    const assistant = await assistantResponse.json();
+    console.log("Created assistant:", assistant.id);
+
+    // Create a thread
+    const threadResponse = await fetch("https://api.openai.com/v1/threads", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openaiApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            role: "user",
+            content: "Please analyze the PDF file and extract the invoice information according to the rules provided."
+          }
+        ],
+      }),
+    });
+
+    if (!threadResponse.ok) {
+      const errorData = await threadResponse.text();
+      console.error("OpenAI Thread Creation Error:", errorData);
+      return new Response(JSON.stringify({ 
+        error: "Failed to create thread",
+        details: errorData 
+      }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
+      });
+    }
+
+    const thread = await threadResponse.json();
+    console.log("Created thread:", thread.id);
+
+    // Run the assistant
+    const runResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openaiApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+      }),
+    });
+
+    if (!runResponse.ok) {
+      const errorData = await runResponse.text();
+      console.error("OpenAI Run Creation Error:", errorData);
+      return new Response(JSON.stringify({ 
+        error: "Failed to run assistant",
+        details: errorData 
+      }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
+      });
+    }
+
+    const run = await runResponse.json();
+    console.log("Started run:", run.id);
+
+    // Wait for completion (simple polling)
+    let runStatus = run;
+    while (runStatus.status === "queued" || runStatus.status === "in_progress") {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const statusResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs/${run.id}`, {
+        headers: {
+          "Authorization": `Bearer ${openaiApiKey}`,
+        },
+      });
+      
+      runStatus = await statusResponse.json();
+      console.log("Run status:", runStatus.status);
+    }
+
+    // Get the messages
+    const messagesResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
+      headers: {
+        "Authorization": `Bearer ${openaiApiKey}`,
+      },
+    });
+
+    const messages = await messagesResponse.json();
+    const result = messages.data[0]?.content[0]?.text?.value;
+
+    // Cleanup: Delete the assistant
+    try {
+      await fetch(`https://api.openai.com/v1/assistants/${assistant.id}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${openaiApiKey}`,
+        },
+      });
+      console.log("Cleaned up assistant");
+    } catch (cleanupError) {
+      console.log("Failed to cleanup assistant:", cleanupError);
+    }
 
     if (!result) {
       return new Response(JSON.stringify({ 
