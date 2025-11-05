@@ -29,19 +29,8 @@ Deno.serve(async (req: Request) => {
     if (!openaiApiKey) {
       return new Response(JSON.stringify({ error: "OpenAI API key not configured" }), {
         status: 500,
-        headers: {
-          "Content-Type": "application/json",
-          ...corsHeaders,
-        },
       });
-    }
-
-    console.log(`Using existing file ID: ${fileId}`);
-    console.log("Analyzing PDF with OpenAI Assistants API...");
         "Authorization": `Bearer ${openaiApiKey}`,
-      body: JSON.stringify({
-
-Analyze the document and return ONLY one of these exact responses:
 
 Return only the classification word, nothing else.
         `.trim(),
@@ -226,16 +215,9 @@ Return only the classification word, nothing else.
                   }
                 }
               },
-              required: ["type", "number_of_invoices", "vendor_name", "invoice_details"],
-              additionalProperties: false
-            }
-          }
-        },
-        instructions: `
 You are an intelligent PDF invoice analyzer. Your task is to examine the provided PDF document and return a structured JSON object with the following information:
 
 IMPORTANT: This PDF may contain scanned images or be image-based. Use your vision capabilities to read text from images and scanned documents.
-
 Step 1: Document Type Identification
 - Determine whether the document is an invoice or a credit memo.
 - If it is a shipment invoice, statement, or any other type of document, respond with: "This is not an invoice.\" and stop further processing.
@@ -243,11 +225,7 @@ Step 1: Document Type Identification
 Step 2: Invoice Extraction
 If the document is an invoice, count how many different invoices are present across all pages.
 
-OCR and Vision Instructions:
 - Carefully examine each page, including scanned images
-- Look for text in various orientations and qualities
-- Pay special attention to headers, invoice numbers, and vendor information
-- If text is unclear, make your best interpretation based on context
 
 For each invoice, return the following details:
 {
