@@ -6,22 +6,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-// Convert PDF to images using pdf2pic service or similar
-async function convertPdfToImages(base64Pdf: string): Promise<string[]> {
-  try {
-    // For now, we'll use a workaround by sending the PDF as a single "image"
-    // In production, you might want to use a service like pdf2pic or similar
-    
-    // Convert PDF base64 to a data URL that OpenAI can process
-    // Note: This is a simplified approach - OpenAI's vision API can sometimes
-    // handle PDF data URLs, though it's not officially documented
-    return [`data:application/pdf;base64,${base64Pdf}`];
-  } catch (error) {
-    console.error("Error converting PDF to images:", error);
-    throw new Error("Failed to convert PDF to images");
-  }
-}
-
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -54,29 +38,68 @@ serve(async (req: Request) => {
       });
     }
 
-    console.log("Converting PDF to images...");
+    console.log("Converting base64 to file blob...");
     
-    // Convert PDF to images
-    const imageDataUrls = await convertPdfToImages(base64);
+    // Convert base64 to Uint8Array
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    // Create a File object from the bytes
+    const pdfFile = new File([bytes], "document.pdf", { type: "application/pdf" });
+
+    console.log("Uploading PDF to OpenAI Files API...");
+
+    // Upload file to OpenAI
+    const formData = new FormData();
+    formData.append("file", pdfFile);
+    formData.append("purpose", "vision");
+
+    const uploadResponse = await fetch("https://api.openai.com/v1/files", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openaiApiKey}`,
+      },
+      body: formData,
+    });
+
+    if (!uploadResponse.ok) {
+      const errorData = await uploadResponse.text();
+      console.error("File upload error:", errorData);
+      return new Response(JSON.stringify({ 
+        error: "Failed to upload file to OpenAI",
+        details: errorData 
+      }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
+      });
+    }
+
+    const uploadData = await uploadResponse.json();
+    const fileId = uploadData.id;
     
-    console.log(`Converted PDF to ${imageDataUrls.length} images`);
-    console.log("Processing with OpenAI Vision API...");
+    console.log(`File uploaded successfully with ID: ${fileId}`);
+    console.log("Analyzing PDF with OpenAI Vision API...");
 
-    // Create content array with all images
-    const imageContent = imageDataUrls.map(imageUrl => ({
-      type: "image_url" as const,
-      image_url: {
-        url: imageUrl,
-        detail: "high" as const
-      }
-    }));
-
-    // Prepare the message for OpenAI with all images
-    const messages = [
-      {
-        role: "system" as const,
-        content: `
-You are an intelligent PDF invoice analyzer. Your task is to examine the provided document images and return a structured JSON object with the following information:
+    // Use the file in chat completion
+    const chatResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openaiApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: `
+You are an intelligent PDF invoice analyzer. Your task is to examine the provided PDF document and return a structured JSON object with the following information:
 
 Step 1: Document Type Identification
 - Determine whether the document is an invoice or a credit memo.
@@ -90,7 +113,6 @@ For each invoice, return the following details:
   "invoice_number": "string",  
   "start_page": "int",         
   "end_page": "int",           
-  "blank_pages": ["list of page numbers"] or "none",
   "vendor_name": "string"      
 }
 
@@ -125,38 +147,46 @@ Return JSON:
     }
   ]
 }
-        `.trim(),
-      },
-      {
-        role: "user" as const,
-        content: [
-          {
-            type: "text" as const,
-            text: "Please analyze these document images and extract the invoice information according to the rules provided. The images are provided in page order.",
+            `.trim(),
           },
-          ...imageContent
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Please analyze this PDF document and extract the invoice information according to the rules provided.",
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:application/pdf;base64,${base64}`,
+                  detail: "high"
+                }
+              }
+            ],
+          },
         ],
-      },
-    ];
-
-    // Call OpenAI API
-    const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${openaiApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        messages: messages,
         temperature: 0.1,
         max_tokens: 2000,
       }),
     });
 
-    if (!openaiResponse.ok) {
-      const errorData = await openaiResponse.text();
-      console.error("OpenAI API Error:", errorData);
+    // Clean up: Delete the uploaded file
+    try {
+      await fetch(`https://api.openai.com/v1/files/${fileId}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${openaiApiKey}`,
+        },
+      });
+      console.log(`Cleaned up file ${fileId}`);
+    } catch (cleanupError) {
+      console.warn("Failed to cleanup file:", cleanupError);
+    }
+
+    if (!chatResponse.ok) {
+      const errorData = await chatResponse.text();
+      console.error("OpenAI Chat API Error:", errorData);
       return new Response(JSON.stringify({ 
         error: "Failed to analyze document with OpenAI",
         details: errorData 
@@ -169,8 +199,8 @@ Return JSON:
       });
     }
 
-    const openaiData = await openaiResponse.json();
-    const result = openaiData.choices[0]?.message?.content;
+    const chatData = await chatResponse.json();
+    const result = chatData.choices[0]?.message?.content;
 
     if (!result) {
       return new Response(JSON.stringify({ 
@@ -196,7 +226,7 @@ Return JSON:
 
     return new Response(JSON.stringify({ 
       success: true,
-      images_processed: imageDataUrls.length,
+      file_id_used: fileId,
       result: parsedResult 
     }), {
       headers: {

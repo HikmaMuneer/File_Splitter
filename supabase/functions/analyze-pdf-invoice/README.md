@@ -4,13 +4,14 @@ This Supabase Edge Function converts PDF pages to individual page documents and 
 
 ## Features
 
-- **PDF Page Processing**: Converts multi-page PDFs into individual page documents for better analysis
+- **OpenAI File Upload**: Uploads PDF to OpenAI's File API for proper processing
 - **Document Type Detection**: Identifies if the document is an invoice, credit memo, or other document type
 - **Multi-Invoice Support**: Can detect and extract multiple invoices from a single PDF
 - **Vendor Name Extraction**: Extracts and normalizes vendor names with specific business rules
 - **Invoice Number Cleaning**: Extracts and cleans invoice numbers according to specific patterns
 - **Page Range Detection**: Identifies start and end pages for each invoice
-- **High-Quality Analysis**: Processes up to 10 pages with high detail for accurate OCR
+- **High-Quality Analysis**: Uses OpenAI's native PDF processing with high detail for accurate OCR
+- **Automatic Cleanup**: Removes uploaded files from OpenAI after processing
 
 ## Setup
 
@@ -58,7 +59,7 @@ if (error) {
 ```json
 {
   "success": true,
-  "pages_processed": 4,
+  "file_id_used": "file-abc123...",
   "result": {
     "type": "invoice",
     "number_of_invoices": 2,
@@ -83,10 +84,11 @@ if (error) {
 
 ## Processing Details
 
-- **Page Limit**: Processes up to 10 pages per PDF to manage API costs and response times
-- **Page Conversion**: Each PDF page is converted to a separate document for individual analysis
+- **File Upload**: Uploads PDF to OpenAI's File API with "vision" purpose
+- **Native PDF Processing**: Uses OpenAI's built-in PDF handling capabilities
 - **High Detail**: Uses OpenAI's "high" detail setting for better text recognition
 - **Model**: Uses GPT-4o for superior vision capabilities
+- **Automatic Cleanup**: Deletes uploaded files after processing to manage storage
 
 ## Business Rules
 
@@ -124,7 +126,7 @@ The function includes CORS headers to allow cross-origin requests from web appli
 
 ## Integration with PDF Splitter
 
-This function can be used in conjunction with your PDF splitter service to:
+This function works perfectly with your PDF splitter service:
 
 1. First analyze the PDF to identify invoice boundaries
 2. Generate splitting instructions based on the analysis
@@ -138,7 +140,7 @@ const analysis = await supabase.functions.invoke('analyze-pdf-invoice', {
   body: { base64: pdfBase64 }
 });
 
-console.log(`Processed ${analysis.data.pages_processed} pages`);
+console.log(`Used file ID: ${analysis.data.file_id_used}`);
 
 // 2. Generate split instructions
 const instructions = analysis.data.result.invoice_details
