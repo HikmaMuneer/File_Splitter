@@ -43,7 +43,7 @@ function parseInstructions(instructions: string): number[][] {
 }
 
 async function splitPdf(pdfBuffer: Buffer, ranges: number[][], originalFilename: string) {
-  const pdfDoc = await PDFDocument.load(pdfBuffer);
+  const pdfDoc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
   const totalPages = pdfDoc.getPageCount();
   
   // Validate all page numbers
