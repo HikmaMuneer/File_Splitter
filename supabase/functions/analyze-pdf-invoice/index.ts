@@ -29,8 +29,29 @@ Deno.serve(async (req: Request) => {
     if (!openaiApiKey) {
       return new Response(JSON.stringify({ error: "OpenAI API key not configured" }), {
         status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
       });
+    }
+
+    // Step 1: Create categorization assistant
+    const categorizationResponse = await fetch("https://api.openai.com/v1/assistants", {
+      method: "POST",
+      headers: {
         "Authorization": `Bearer ${openaiApiKey}`,
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        name: "Document Categorizer",
+        instructions: `
+You are a document classifier. Analyze the provided document and classify it as one of the following:
+- invoice
+- credit_memo
+- not_an_invoice
 
 Return only the classification word, nothing else.
         `.trim(),
@@ -69,7 +90,7 @@ Return only the classification word, nothing else.
     const categorizationThreadResponse = await fetch("https://api.openai.com/v1/threads", {
       method: "POST",
       headers: {
-        "Authorization": \`Bearer ${openaiApiKey}`,
+        "Authorization": `Bearer ${openaiApiKey}`,
         "Content-Type": "application/json",
         "OpenAI-Beta": "assistants=v2",
       },
@@ -86,10 +107,10 @@ Return only the classification word, nothing else.
     const categorizationThread = await categorizationThreadResponse.json();
 
     // Run categorization
-    const categorizationRunResponse = await fetch(\`https://api.openai.com/v1/threads/${categorizationThread.id}/runs`, {
+    const categorizationRunResponse = await fetch(`https://api.openai.com/v1/threads/${categorizationThread.id}/runs`, {
       method: "POST",
       headers: {
-        "Authorization": \`Bearer ${openaiApiKey}`,
+        "Authorization": `Bearer ${openaiApiKey}`,
         "Content-Type": "application/json",
         "OpenAI-Beta": "assistants=v2",
       },
@@ -105,9 +126,9 @@ Return only the classification word, nothing else.
     while (categorizationRunStatus.status === "queued" || categorizationRunStatus.status === "in_progress") {
       await new Promise(resolve => setTimeout(resolve, 1000));
       
-      const statusResponse = await fetch(\`https://api.openai.com/v1/threads/${categorizationThread.id}/runs/${categorizationRun.id}`, {
+      const statusResponse = await fetch(`https://api.openai.com/v1/threads/${categorizationThread.id}/runs/${categorizationRun.id}`, {
         headers: {
-          "Authorization": \`Bearer ${openaiApiKey}`,
+          "Authorization": `Bearer ${openaiApiKey}`,
           "OpenAI-Beta": "assistants=v2",
         },
       });
@@ -116,9 +137,9 @@ Return only the classification word, nothing else.
     }
 
     // Get categorization result
-    const categorizationMessagesResponse = await fetch(\`https://api.openai.com/v1/threads/${categorizationThread.id}/messages`, {
+    const categorizationMessagesResponse = await fetch(`https://api.openai.com/v1/threads/${categorizationThread.id}/messages`, {
       headers: {
-        "Authorization": \`Bearer ${openaiApiKey}`,
+        "Authorization": `Bearer ${openaiApiKey}`,
         "OpenAI-Beta": "assistants=v2",
       },
     });
@@ -128,10 +149,10 @@ Return only the classification word, nothing else.
 
     // Cleanup categorization assistant
     try {
-      await fetch(\`https://api.openai.com/v1/assistants/${categorizationAssistant.id}`, {
+      await fetch(`https://api.openai.com/v1/assistants/${categorizationAssistant.id}`, {
         method: "DELETE",
         headers: {
-          "Authorization": \`Bearer ${openaiApiKey}`,
+          "Authorization": `Bearer ${openaiApiKey}`,
           "OpenAI-Beta": "assistants=v2",
         },
       });
@@ -150,7 +171,7 @@ Return only the classification word, nothing else.
           type: documentType,
           message: documentType === "not_an_invoice" 
             ? "This document is not an invoice and cannot be processed for invoice splitting."
-            : \`This document is a ${documentType}, not a standard invoice.`
+            : `This document is a ${documentType}, not a standard invoice.`
         }
       }), {
         headers: {
@@ -164,7 +185,7 @@ Return only the classification word, nothing else.
     const assistantResponse = await fetch("https://api.openai.com/v1/assistants", {
       method: "POST",
       headers: {
-        "Authorization": \`Bearer ${openaiApiKey}`,
+        "Authorization": `Bearer ${openaiApiKey}`,
         "Content-Type": "application/json",
         "OpenAI-Beta": "assistants=v2",
       },
@@ -215,17 +236,28 @@ Return only the classification word, nothing else.
                   }
                 }
               },
+              required: ["type", "number_of_invoices", "vendor_name", "invoice_details"],
+              additionalProperties: false
+            }
+          }
+        },
+        instructions: `
 You are an intelligent PDF invoice analyzer. Your task is to examine the provided PDF document and return a structured JSON object with the following information:
 
 IMPORTANT: This PDF may contain scanned images or be image-based. Use your vision capabilities to read text from images and scanned documents.
+
 Step 1: Document Type Identification
 - Determine whether the document is an invoice or a credit memo.
-- If it is a shipment invoice, statement, or any other type of document, respond with: "This is not an invoice.\" and stop further processing.
+- If it is a shipment invoice, statement, or any other type of document, respond with: "This is not an invoice." and stop further processing.
 
 Step 2: Invoice Extraction
 If the document is an invoice, count how many different invoices are present across all pages.
 
+OCR and Vision Instructions:
 - Carefully examine each page, including scanned images
+- Look for text in various orientations and qualities
+- Pay special attention to headers, invoice numbers, and vendor information
+- If text is unclear, make your best interpretation based on context
 
 For each invoice, return the following details:
 {
@@ -239,7 +271,7 @@ Invoice Number Extraction Rules:
 - Only extract invoice numbers clearly labeled as: "INVOICE", "INVOICE NO", "Invoice#", or "Invoice Number".
 - Do NOT extract numbers labeled as PO Number, Customer Number, Customer#, Document Number, or Order Number.
 - Clean the invoice number by removing labels (like "INV", "INVOICE", "#", etc.) and special characters such as hyphens or slashes.
-- If the invoice number is in a format like "ABC-12345\" or "11-1234", extract only the part after the dash.
+- If the invoice number is in a format like "ABC-12345" or "11-1234", extract only the part after the dash.
 - If an invoice number cannot be confidently determined after checking the page, return "not an invoice".
 
 Vendor Name Extraction Rules:
@@ -247,9 +279,9 @@ Vendor Name Extraction Rules:
 - Return only the vendor name that issued the invoice.
 - Clean name for filenames (no special chars, no extra spaces).
 - Normalize common variations:
-  - "V.H. Blackinton Co., Inc.", "V,H, CO.\" → "VH Blackinton"
-  - "Premier Emblem\" remains "Premier Emblem"
-  - "Asti Manufacturing LLC\" → "Asti Manufacturing"
+  - "V.H. Blackinton Co., Inc.", "V,H, CO." → "VH Blackinton"
+  - "Premier Emblem" remains "Premier Emblem"
+  - "Asti Manufacturing LLC" → "Asti Manufacturing"
 - If vendor name is not found, return "Unknown Vendor".
 
 Return JSON:
@@ -304,7 +336,7 @@ IMPORTANT: You must return ONLY valid JSON that matches the exact schema. Do not
     const threadResponse = await fetch("https://api.openai.com/v1/threads", {
       method: "POST",
       headers: {
-        "Authorization": \`Bearer ${openaiApiKey}`,
+        "Authorization": `Bearer ${openaiApiKey}`,
         "Content-Type": "application/json",
         "OpenAI-Beta": "assistants=v2",
       },
@@ -337,10 +369,10 @@ IMPORTANT: You must return ONLY valid JSON that matches the exact schema. Do not
     console.log("Created thread:", thread.id);
 
     // Run the assistant
-    const runResponse = await fetch(\`https://api.openai.com/v1/threads/${thread.id}/runs`, {
+    const runResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs`, {
       method: "POST",
       headers: {
-        "Authorization": \`Bearer ${openaiApiKey}`,
+        "Authorization": `Bearer ${openaiApiKey}`,
         "Content-Type": "application/json",
         "OpenAI-Beta": "assistants=v2",
       },
@@ -372,9 +404,9 @@ IMPORTANT: You must return ONLY valid JSON that matches the exact schema. Do not
     while (runStatus.status === "queued" || runStatus.status === "in_progress") {
       await new Promise(resolve => setTimeout(resolve, 1000));
       
-      const statusResponse = await fetch(\`https://api.openai.com/v1/threads/${thread.id}/runs/${run.id}`, {
+      const statusResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs/${run.id}`, {
         headers: {
-          "Authorization": \`Bearer ${openaiApiKey}`,
+          "Authorization": `Bearer ${openaiApiKey}`,
           "OpenAI-Beta": "assistants=v2",
         },
       });
@@ -384,9 +416,9 @@ IMPORTANT: You must return ONLY valid JSON that matches the exact schema. Do not
     }
 
     // Get the messages
-    const messagesResponse = await fetch(\`https://api.openai.com/v1/threads/${thread.id}/messages`, {
+    const messagesResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
       headers: {
-        "Authorization": \`Bearer ${openaiApiKey}`,
+        "Authorization": `Bearer ${openaiApiKey}`,
         "OpenAI-Beta": "assistants=v2",
       },
     });
@@ -396,10 +428,10 @@ IMPORTANT: You must return ONLY valid JSON that matches the exact schema. Do not
 
     // Cleanup: Delete the assistant
     try {
-      await fetch(\`https://api.openai.com/v1/assistants/${assistant.id}`, {
+      await fetch(`https://api.openai.com/v1/assistants/${assistant.id}`, {
         method: "DELETE",
         headers: {
-          "Authorization": \`Bearer ${openaiApiKey}`,
+          "Authorization": `Bearer ${openaiApiKey}`,
           "OpenAI-Beta": "assistants=v2",
         },
       });
