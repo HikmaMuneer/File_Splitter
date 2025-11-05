@@ -39,7 +39,34 @@ Deno.serve(async (req: Request) => {
     console.log(`Using existing file ID: ${fileId}`);
     console.log("Analyzing PDF with OpenAI Vision API...");
 
-    // Use the file in chat completion
+    // First, get the file content from OpenAI
+    const fileResponse = await fetch(`https://api.openai.com/v1/files/${fileId}/content`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${openaiApiKey}`,
+      },
+    });
+
+    if (!fileResponse.ok) {
+      const errorData = await fileResponse.text();
+      console.error("OpenAI File API Error:", errorData);
+      return new Response(JSON.stringify({ 
+        error: "Failed to retrieve file from OpenAI",
+        details: errorData 
+      }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
+      });
+    }
+
+    // Convert file content to base64
+    const fileBuffer = await fileResponse.arrayBuffer();
+    const base64Content = btoa(String.fromCharCode(...new Uint8Array(fileBuffer)));
+
+    // Use the file content in chat completion
     const chatResponse = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -118,8 +145,6 @@ Return JSON:
         ],
         temperature: 0.1,
         max_tokens: 2000,
-        // Reference the uploaded file
-        file_ids: [fileId]
       }),
     });
 
