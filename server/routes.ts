@@ -2,91 +2,13 @@ import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer, { type Multer } from "multer";
-import { PDFDocument } from "pdf-lib";
-import JSZip from "jszip";
 import { splitInstructionsSchema } from "@shared/schema";
-import path from "path";
-import fs from "fs";
+import { splitPdfFromInstructions } from "./pdf-splitter";
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
 });
-
-function parseInstructions(instructions: string): number[][] {
-  const ranges: number[][] = [];
-  const parts = instructions.split(',').map(s => s.trim());
-  
-  for (const part of parts) {
-    if (part.includes('-')) {
-      // Range like "1-3"
-      const [start, end] = part.split('-').map(s => parseInt(s.trim()));
-      if (isNaN(start) || isNaN(end) || start > end || start < 1) {
-        throw new Error(`Invalid range: ${part}`);
-      }
-      const range = [];
-      for (let i = start; i <= end; i++) {
-        range.push(i);
-      }
-      ranges.push(range);
-    } else {
-      // Individual page like "5"
-      const page = parseInt(part);
-      if (isNaN(page) || page < 1) {
-        throw new Error(`Invalid page number: ${part}`);
-      }
-      ranges.push([page]);
-    }
-  }
-  
-  return ranges;
-}
-
-async function splitPdf(pdfBuffer: Buffer, ranges: number[][], originalFilename: string) {
-  const pdfDoc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
-  const totalPages = pdfDoc.getPageCount();
-  
-  // Validate all page numbers
-  for (const range of ranges) {
-    for (const pageNum of range) {
-      if (pageNum > totalPages) {
-        throw new Error(`Page ${pageNum} does not exist. PDF has ${totalPages} pages.`);
-      }
-    }
-  }
-  
-  const results = [];
-  const baseFilename = path.parse(originalFilename).name;
-  
-  for (let i = 0; i < ranges.length; i++) {
-    const range = ranges[i];
-    const newPdf = await PDFDocument.create();
-    
-    for (const pageNum of range) {
-      const [copiedPage] = await newPdf.copyPages(pdfDoc, [pageNum - 1]); // Convert to 0-based
-      newPdf.addPage(copiedPage);
-    }
-    
-    const pdfBytes = await newPdf.save();
-    
-    // Generate filename
-    let filename;
-    if (range.length === 1) {
-      filename = `${baseFilename}-page-${range[0]}.pdf`;
-    } else {
-      filename = `${baseFilename}-pages-${range[0]}-${range[range.length - 1]}.pdf`;
-    }
-    
-    results.push({
-      filename,
-      data: pdfBytes,
-      pages: range,
-      size: pdfBytes.length
-    });
-  }
-  
-  return results;
-}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   
@@ -117,33 +39,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       try {
-        // Parse instructions
-        const ranges = parseInstructions(instructions);
+        // Split PDF and create ZIP
+        const splitResult = await splitPdfFromInstructions(
+          req.file.buffer, 
+          instructions, 
+          req.file.originalname,
+          true // return ZIP
+        );
         
-        // Split PDF
-        const splitResults = await splitPdf(req.file.buffer, ranges, req.file.originalname);
-        
-        // Create ZIP file
-        const zip = new JSZip();
-        
-        for (const result of splitResults) {
-          zip.file(result.filename, result.data);
+        if (!splitResult.success) {
+          throw new Error(splitResult.error || "Failed to split PDF");
         }
-        
-        const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
         
         // Update job status
         await storage.updatePdfJob(job.id, {
           status: "completed",
-          resultFiles: splitResults.map(r => r.filename)
+          resultFiles: splitResult.results.map(r => r.filename)
         });
         
         // Send ZIP file
-        const zipFilename = `${path.parse(req.file.originalname).name}-split.zip`;
-        
         res.setHeader('Content-Type', 'application/zip');
-        res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
-        res.send(zipBuffer);
+        res.setHeader('Content-Disposition', `attachment; filename="${splitResult.zipFilename}"`);
+        res.send(splitResult.zipBuffer);
         
       } catch (error) {
         // Update job with error
