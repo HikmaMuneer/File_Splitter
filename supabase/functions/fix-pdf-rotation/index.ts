@@ -18,6 +18,21 @@ Deno.serve(async (req: Request) => {
     const { base64_file, prompt_to_send } = await req.json();
     const apiKey = Deno.env.get('OPENAI_API_KEY');
 
+    if (!apiKey) {
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: 'OpenAI API key not configured' 
+        }),
+        {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+            ...corsHeaders,
+          },
+        }
+      );
+    }
     if (!base64_file || !prompt_to_send) {
       return new Response(
         JSON.stringify({ 
