@@ -1,26 +1,3 @@
-/*
-  # PDF Invoice Analyzer Edge Function
-
-  1. New Function
-    - Converts PDF to images using pdf-lib and canvas
-    - Analyzes PDF invoices using OpenAI's vision API
-    - Extracts invoice details, vendor information, and page ranges
-    - Returns structured JSON with invoice data
-
-  2. Features
-    - PDF to image conversion for better OCR
-    - Document type identification (invoice vs other documents)
-    - Multi-invoice detection and extraction
-    - Vendor name normalization
-    - Invoice number cleaning and validation
-    - Page range detection for splitting
-
-  3. Security
-    - Requires OpenAI API key in environment variables
-    - Input validation for base64 PDF data
-    - Error handling for API failures
-*/
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
@@ -28,43 +5,6 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
-
-// Convert PDF to images using pdf-lib
-async function pdfToImages(base64Pdf: string): Promise<string[]> {
-  try {
-    // Import pdf-lib dynamically
-    const { PDFDocument } = await import("https://cdn.skypack.dev/pdf-lib@1.17.1");
-    
-    // Convert base64 to Uint8Array
-    const pdfBytes = Uint8Array.from(atob(base64Pdf), c => c.charCodeAt(0));
-    
-    // Load the PDF
-    const pdfDoc = await PDFDocument.load(pdfBytes);
-    const pageCount = pdfDoc.getPageCount();
-    
-    const images: string[] = [];
-    
-    // For now, we'll send the first few pages as base64 PDF data
-    // since true PDF-to-image conversion requires canvas/node-canvas
-    // which isn't available in Deno edge functions
-    
-    // As a workaround, we'll extract individual pages as separate PDFs
-    for (let i = 0; i < Math.min(pageCount, 10); i++) { // Limit to first 10 pages
-      const newPdf = await PDFDocument.create();
-      const [copiedPage] = await newPdf.copyPages(pdfDoc, [i]);
-      newPdf.addPage(copiedPage);
-      
-      const pdfBytesPage = await newPdf.save();
-      const base64Page = btoa(String.fromCharCode(...pdfBytesPage));
-      images.push(base64Page);
-    }
-    
-    return images;
-  } catch (error) {
-    console.error("Error converting PDF to images:", error);
-    throw new Error("Failed to process PDF pages");
-  }
-}
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -98,17 +38,14 @@ serve(async (req: Request) => {
       });
     }
 
-    // Convert PDF to individual page PDFs (since true image conversion isn't available)
-    console.log("Converting PDF to individual pages...");
-    const pageImages = await pdfToImages(base64);
-    console.log(`Converted PDF to ${pageImages.length} pages`);
+    console.log("Processing PDF with OpenAI Vision API...");
 
-    // Prepare messages for OpenAI with multiple pages
+    // Prepare the message for OpenAI with the PDF as a base64 image
     const messages = [
       {
         role: "system",
         content: `
-You are an intelligent PDF invoice analyzer. Your task is to examine the provided PDF pages and return a structured JSON object with the following information:
+You are an intelligent PDF invoice analyzer. Your task is to examine the provided PDF document and return a structured JSON object with the following information:
 
 Step 1: Document Type Identification
 - Determine whether the document is an invoice or a credit memo.
@@ -164,16 +101,15 @@ Return JSON:
         content: [
           {
             type: "text",
-            text: `Here are the PDF pages to analyze. I'm providing ${pageImages.length} pages from the document.`,
+            text: "Please analyze this PDF document and extract the invoice information according to the rules provided.",
           },
-          // Add each page as a separate image
-          ...pageImages.map((pageBase64, index) => ({
+          {
             type: "image_url",
             image_url: {
-              url: `data:application/pdf;base64,${pageBase64}`,
+              url: `data:application/pdf;base64,${base64}`,
               detail: "high"
             },
-          })),
+          },
         ],
       },
     ];
@@ -229,12 +165,12 @@ Return JSON:
       parsedResult = JSON.parse(result);
     } catch (parseError) {
       // If parsing fails, return the raw result
+      console.log("Failed to parse JSON, returning raw result:", result);
       parsedResult = { raw_result: result };
     }
 
     return new Response(JSON.stringify({ 
       success: true,
-      pages_processed: pageImages.length,
       result: parsedResult 
     }), {
       headers: {
