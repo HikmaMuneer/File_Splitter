@@ -50,6 +50,55 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({
         model: "gpt-4o",
         name: "PDF Invoice Analyzer",
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "invoice_analysis",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  enum: ["invoice", "credit_memo", "not_an_invoice"]
+                },
+                number_of_invoices: {
+                  type: "integer",
+                  minimum: 0
+                },
+                vendor_name: {
+                  type: "string"
+                },
+                invoice_details: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      invoice_number: {
+                        type: "string"
+                      },
+                      start_page: {
+                        type: "integer",
+                        minimum: 1
+                      },
+                      end_page: {
+                        type: "integer",
+                        minimum: 1
+                      },
+                      vendor_name: {
+                        type: "string"
+                      }
+                    },
+                    required: ["invoice_number", "start_page", "end_page", "vendor_name"],
+                    additionalProperties: false
+                  }
+                }
+              },
+              required: ["type", "number_of_invoices", "vendor_name", "invoice_details"],
+              additionalProperties: false
+            }
+          }
+        },
         instructions: `
 You are an intelligent PDF invoice analyzer. Your task is to examine the provided PDF document and return a structured JSON object with the following information:
 
@@ -99,6 +148,8 @@ Return JSON:
     }
   ]
 }
+
+IMPORTANT: You must return ONLY valid JSON that matches the exact schema. Do not include any explanatory text, markdown formatting, or additional content outside the JSON structure.
         `.trim(),
         tools: [{ type: "file_search" }],
         tool_resources: {
@@ -251,14 +302,30 @@ Return JSON:
       });
     }
 
-    // Try to parse the result as JSON
+    // Parse the structured JSON response
     let parsedResult;
     try {
       parsedResult = JSON.parse(result);
+      
+      // Validate the response structure
+      if (!parsedResult.type || !parsedResult.hasOwnProperty('number_of_invoices') || 
+          !parsedResult.vendor_name || !Array.isArray(parsedResult.invoice_details)) {
+        throw new Error("Invalid response structure");
+      }
+      
     } catch (parseError) {
-      // If parsing fails, return the raw result
-      console.log("Failed to parse JSON, returning raw result:", result);
-      parsedResult = { raw_result: result };
+      console.error("Failed to parse structured response:", parseError);
+      return new Response(JSON.stringify({ 
+        error: "Invalid response format from OpenAI",
+        details: parseError.message,
+        raw_result: result
+      }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+          ...corsHeaders,
+        },
+      });
     }
 
     return new Response(JSON.stringify({ 
