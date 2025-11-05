@@ -38,27 +38,10 @@ Deno.serve(async (req: Request) => {
 
     console.log(`Using existing file ID: ${fileId}`);
     console.log("Analyzing PDF with OpenAI Assistants API...");
-
-    // Step 1: First categorize the document type
-    const categorizationResponse = await fetch("https://api.openai.com/v1/assistants", {
-      method: "POST",
-      headers: {
         "Authorization": `Bearer ${openaiApiKey}`,
-        "Content-Type": "application/json",
-        "OpenAI-Beta": "assistants=v2",
-      },
       body: JSON.stringify({
-        model: "gpt-4o",
-        name: "Document Type Categorizer",
-        instructions: `
-You are a document type classifier. Your task is to examine the provided PDF document and determine its type.
-
-This PDF may contain scanned images or text. Use your vision capabilities to read any text in images.
 
 Analyze the document and return ONLY one of these exact responses:
-- "invoice" - if the document contains invoices
-- "credit_memo" - if the document contains credit memos
-- "not_an_invoice" - if it's any other type of document (shipment invoice, statement, receipt, etc.)
 
 Return only the classification word, nothing else.
         `.trim(),
