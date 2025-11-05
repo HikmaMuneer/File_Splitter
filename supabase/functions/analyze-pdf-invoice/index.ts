@@ -15,10 +15,10 @@ serve(async (req: Request) => {
   }
 
   try {
-    const { base64 } = await req.json();
+    const { fileId } = await req.json();
 
-    if (!base64) {
-      return new Response(JSON.stringify({ error: "Missing base64 data" }), {
+    if (!fileId) {
+      return new Response(JSON.stringify({ error: "Missing fileId" }), {
         status: 400,
         headers: {
           "Content-Type": "application/json",
@@ -38,52 +38,7 @@ serve(async (req: Request) => {
       });
     }
 
-    console.log("Converting base64 to file blob...");
-    
-    // Convert base64 to Uint8Array
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-
-    // Create a File object from the bytes
-    const pdfFile = new File([bytes], "document.pdf", { type: "application/pdf" });
-
-    console.log("Uploading PDF to OpenAI Files API...");
-
-    // Upload file to OpenAI
-    const formData = new FormData();
-    formData.append("file", pdfFile);
-    formData.append("purpose", "vision");
-
-    const uploadResponse = await fetch("https://api.openai.com/v1/files", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${openaiApiKey}`,
-      },
-      body: formData,
-    });
-
-    if (!uploadResponse.ok) {
-      const errorData = await uploadResponse.text();
-      console.error("File upload error:", errorData);
-      return new Response(JSON.stringify({ 
-        error: "Failed to upload file to OpenAI",
-        details: errorData 
-      }), {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-          ...corsHeaders,
-        },
-      });
-    }
-
-    const uploadData = await uploadResponse.json();
-    const fileId = uploadData.id;
-    
-    console.log(`File uploaded successfully with ID: ${fileId}`);
+    console.log(`Using existing file ID: ${fileId}`);
     console.log("Analyzing PDF with OpenAI Vision API...");
 
     // Use the file in chat completion
@@ -157,32 +112,18 @@ Return JSON:
                 text: "Please analyze this PDF document and extract the invoice information according to the rules provided.",
               },
               {
-                type: "image_url",
-                image_url: {
-                  url: `data:application/pdf;base64,${base64}`,
-                  detail: "high"
-                }
+                type: "text",
+                text: `Please analyze the PDF file with ID: ${fileId}`
               }
             ],
           },
         ],
         temperature: 0.1,
         max_tokens: 2000,
+        // Reference the uploaded file
+        file_ids: [fileId]
       }),
     });
-
-    // Clean up: Delete the uploaded file
-    try {
-      await fetch(`https://api.openai.com/v1/files/${fileId}`, {
-        method: "DELETE",
-        headers: {
-          "Authorization": `Bearer ${openaiApiKey}`,
-        },
-      });
-      console.log(`Cleaned up file ${fileId}`);
-    } catch (cleanupError) {
-      console.warn("Failed to cleanup file:", cleanupError);
-    }
 
     if (!chatResponse.ok) {
       const errorData = await chatResponse.text();
@@ -226,7 +167,7 @@ Return JSON:
 
     return new Response(JSON.stringify({ 
       success: true,
-      file_id_used: fileId,
+      file_id_analyzed: fileId,
       result: parsedResult 
     }), {
       headers: {

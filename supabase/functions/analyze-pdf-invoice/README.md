@@ -30,11 +30,11 @@ This Supabase Edge Function converts PDF pages to individual page documents and 
 ### Request
 
 ```bash
-curl -X POST 'https://your-project.supabase.co/functions/v1/analyze-pdf-invoice' \
+curl -X POST 'https://hikmamuneer-file-spl-bawl.bolt.host/functions/v1/analyze-pdf-invoice' \
   -H 'Authorization: Bearer YOUR_ANON_KEY' \
   -H 'Content-Type: application/json' \
   -d '{
-    "base64": "JVBERi0xLjQKJcOkw7zDtsO..."
+    "fileId": "file-abc123def456..."
   }'
 ```
 
@@ -43,7 +43,7 @@ curl -X POST 'https://your-project.supabase.co/functions/v1/analyze-pdf-invoice'
 ```javascript
 const { data, error } = await supabase.functions.invoke('analyze-pdf-invoice', {
   body: {
-    base64: pdfBase64String
+    fileId: 'file-abc123def456...'
   }
 });
 
@@ -59,7 +59,7 @@ if (error) {
 ```json
 {
   "success": true,
-  "file_id_used": "file-abc123...",
+  "file_id_analyzed": "file-abc123...",
   "result": {
     "type": "invoice",
     "number_of_invoices": 2,
@@ -84,11 +84,11 @@ if (error) {
 
 ## Processing Details
 
-- **File Upload**: Uploads PDF to OpenAI's File API with "vision" purpose
-- **Native PDF Processing**: Uses OpenAI's built-in PDF handling capabilities
+- **File Reference**: Uses existing OpenAI file ID for analysis
+- **No Upload Overhead**: Skips file upload step for faster processing
 - **High Detail**: Uses OpenAI's "high" detail setting for better text recognition
 - **Model**: Uses GPT-4o for superior vision capabilities
-- **Automatic Cleanup**: Deletes uploaded files after processing to manage storage
+- **File Management**: Assumes file is already uploaded to OpenAI
 
 ## Business Rules
 
@@ -114,7 +114,7 @@ if (error) {
 
 The function handles various error scenarios:
 
-- Missing base64 data (400)
+- Missing fileId (400)
 - Missing OpenAI API key (500)
 - OpenAI API failures (500)
 - JSON parsing errors (returns raw result)
@@ -135,19 +135,31 @@ This function works perfectly with your PDF splitter service:
 
 Example workflow:
 ```javascript
-// 1. Analyze PDF
+// 1. Upload PDF to OpenAI first (separate step)
+const uploadFormData = new FormData();
+uploadFormData.append('file', pdfFile);
+uploadFormData.append('purpose', 'vision');
+
+const uploadResponse = await fetch('https://api.openai.com/v1/files', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${openaiApiKey}` },
+  body: uploadFormData
+});
+const { id: fileId } = await uploadResponse.json();
+
+// 2. Analyze PDF using file ID
 const analysis = await supabase.functions.invoke('analyze-pdf-invoice', {
-  body: { base64: pdfBase64 }
+  body: { fileId }
 });
 
-console.log(`Used file ID: ${analysis.data.file_id_used}`);
+console.log(`Analyzed file ID: ${analysis.data.file_id_analyzed}`);
 
-// 2. Generate split instructions
+// 3. Generate split instructions
 const instructions = analysis.data.result.invoice_details
   .map(invoice => `${invoice.start_page}-${invoice.end_page}`)
   .join(', ');
 
-// 3. Split PDF using your existing API
+// 4. Split PDF using your existing API
 const formData = new FormData();
 formData.append('pdf', pdfFile);
 formData.append('instructions', instructions);
